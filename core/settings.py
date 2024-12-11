@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 import os, random, string
 from pathlib import Path
 from dotenv import load_dotenv
+from django.core.cache.backends.base import InvalidCacheBackendError
+from pymemcache.client.base import Client
 
 # Import for CORS headers
 from corsheaders.defaults import default_headers
@@ -49,15 +51,15 @@ RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
 if RENDER_EXTERNAL_HOSTNAME:    
     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 
-#Secure Cookies
-#Ensure cookies are only sent over HTTPS
-SESSION_COOKIE_SECURE = True
-
-# Prevents JavaScript from accessing session cookies
-SESSION_COOKIE_HTTPONLY = True
-
-#Mitigate CSRF attacks by restricting cross-origin cookie sharing
-SESSION_COOKIE_SAMESITE = 'Strict'
+#Secure Cookies Can be implemented but it affects OTP Functionality.
+#Ensure cookies are only sent over HTTPS when set True
+SESSION_COOKIE_SECURE = False
+ 
+# Prevents JavaScript from accessing session cookies when set True
+SESSION_COOKIE_HTTPONLY = False
+ 
+#Mitigate CSRF attacks by restricting cross-origin cookie sharing when set Strict
+SESSION_COOKIE_SAMESITE = 'Lax'
 
 #Ensure CSRF cookies are sent over HTTPS only
 CSRF_COOKIE_SECURE = True
@@ -77,13 +79,13 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760  
 
 
-
 # Application definition
 
 INSTALLED_APPS = [
-   'crispy_forms',
+    'crispy_forms',
     'tinymce',
     'crispy_bootstrap5',
+    'captcha',
     "django_light",
     # "django.contrib.admin",
     "core.apps.CustomAdminConfig",
@@ -102,7 +104,9 @@ INSTALLED_APPS = [
 
     'home',
     'theme_pixel',
+
     'corsheaders',
+
 
 ]
 
@@ -110,14 +114,15 @@ MIDDLEWARE = [
     # CORS middleware must come before commonmiddleware
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "home.idle.IdleTimeoutMiddleware",  
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "core.middleware.LogRequestMiddleware"
+    "home.ratelimit_middleware.GlobalLockoutMiddleware",
+    "core.middleware.LogRequestMiddleware",
 ]
 
 LOGGING = {
@@ -146,7 +151,11 @@ HOME_TEMPLATES = os.path.join(BASE_DIR, 'home', 'templates')
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
+
+        "DIRS": [BASE_DIR / HOME_TEMPLATES],
+
         "DIRS": [os.path.join(BASE_DIR, "templates")],
+      
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -154,6 +163,9 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                'home.context_processors.dynamic_page_title',
+
+
             ],
         },
     },
@@ -187,7 +199,7 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': 'db.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
 
@@ -196,6 +208,15 @@ AUTH_USER_MODEL = "home.User"
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
 
+# Password hashing using bcrypt
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',  # Built-in bcrypt with SHA256
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+]
+
+# Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
@@ -267,6 +288,36 @@ MESSAGE_TAGS = {
 }
 
 
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+        'LOCATION': os.getenv('CACHE_LOCATION', '127.0.0.1:11211'),  # Default local if not specified
+    }
+}
+
+try:
+    from pymemcache.client import Client
+    client = Client(os.getenv('CACHE_LOCATION', '127.0.0.1:11211'))
+    client.version()
+except (ImportError, InvalidCacheBackendError, ConnectionRefusedError):
+    
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        }
+    }
+
+RATELIMIT_ENABLE = True
+RATELIMIT_VIEW = 'django_ratelimit.ratelimit_view'
+RATELIMIT_USE_CACHE = 'default'
+
+RATELIMIT_SETTINGS = {
+    'login': {
+        'rate': '5/m',  # 5 attempts per minute
+        'block_expiration': 60,  # block for 1 minute after 5 attempts
+    },
+}
+
 # Prevent MIME type sniffing
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
@@ -283,6 +334,11 @@ SECURE_HSTS_PRELOAD = True
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+SESSION_COOKIE_AGE = 600 #10 minutes
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_SAVE_EVERY_REQUEST = True
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'
 
 #cron-job-feature
 # Django-cron configuration class
@@ -351,4 +407,5 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     'authorization',
 
 ]
+
 
